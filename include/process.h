@@ -2,7 +2,9 @@
 
 #include <stdint.h>
 
+#include "main.h"
+
 /**
  * Process one photodiode reading
  */
-void process_raw_reading(uint16_t);
+void process_raw_reading(adc_sample_t *);

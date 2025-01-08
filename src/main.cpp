@@ -1,11 +1,17 @@
+#include "main.h"
+
 #include <Arduino.h>
+
 #include "pins.h"
+#include "lcd.h"
 
 #include "process.h"
 
-#define READ_BUF_SZ 128
-// number of readings to average
+// ADC configuration
+#define READ_BUF_SZ 72
+// Number of ADC conversions to average (oversample) for one sample
 // One ADC conversion takes 13 ADC clk cycles, i.e. conversion rate of ~9.6kHz with 125kHz ADC clk
+// Oversampling of 256 results in sample rate of ~38Hz
 #define READ_OVERSAMPLE 256
 
 void setup() {
@@ -21,6 +27,10 @@ void setup() {
 
   // Init Serial
   Serial.begin(500000);
+  Serial.println(F("Begin!"));
+
+  // Init LCD
+  lcd_init();
 
   // Start conversion
   Serial.println(F("Start ADC conversion..."));
@@ -30,11 +40,14 @@ void setup() {
 
 //
 volatile uint32_t sum = 0;
-volatile uint16_t results[READ_BUF_SZ];
+volatile adc_sample_t results[READ_BUF_SZ];
 volatile uint8_t results_available = 0;
 volatile uint16_t num_readings = 0;
 volatile uint8_t sample_channel = PDIODE_A_CH;
 
+/**
+ * ADC sample complete ISR
+ */
 ISR(ADC_vect) { // a conversion has just completed
   // Check if requested channel has been changed
   if ((ADMUX & 0b1111) != sample_channel) { // MUX[3:0] value differs; update channel
@@ -45,7 +58,8 @@ ISR(ADC_vect) { // a conversion has just completed
     ++num_readings;
     if (num_readings > READ_OVERSAMPLE) { // acquired sufficient samples
       if (results_available < READ_BUF_SZ) { // have space in output buffer
-        results[results_available] = sum/READ_OVERSAMPLE;
+        results[results_available].val = sum/READ_OVERSAMPLE;
+        results[results_available].t = millis();
         ++results_available;
       }
       sum = num_readings = 0;
@@ -74,7 +88,7 @@ static void adc_update_ch(uint8_t new_ch) {
 }
 
 void loop() {
-  static uint16_t results_proc[READ_BUF_SZ];
+  static adc_sample_t results_proc[READ_BUF_SZ];
   static uint8_t results_count;
   static uint32_t last_glucose_press = 0;
 
@@ -82,8 +96,11 @@ void loop() {
     // process the batch of ADC readings
     const uint8_t sreg = SREG;
     cli(); // disable interrupts for atomicity. note that interrupts received aren't discarded, they just aren't serviced
-    // copy to another buffer for processing that won't be mutated by ISR
-    for (uint8_t i = 0; i < results_available; ++i) results_proc[i] = results[i]; // memcpy not used as it discards volatile modifier
+    // copy to another buffer for processing that won't be mutated by ISR (memcpy not used as it discards volatile modifier)
+    for (uint8_t i = 0; i < results_available; ++i) {
+      results_proc[i].t = results[i].t;
+      results_proc[i].val = results[i].val;
+    }
     // update counters for our use and ISR
     results_count = results_available;
     results_available = 0;
@@ -91,7 +108,7 @@ void loop() {
 
     // process everything in a batch
     for (uint8_t i = 0; i < results_count; ++i) {
-      process_raw_reading(results_proc[i]);
+      process_raw_reading(&results_proc[i]);
       // Serial.println(results_proc[i]);
     }
   }
@@ -104,7 +121,7 @@ void loop() {
     adc_update_ch(PRESIST_A_CH);
     Serial.println(F("Reading glucose channel..."));
     while (results_available == 0) {} // wait until new results available
-    Serial.println(results[0]);
+    Serial.println(results[0].val);
     adc_update_ch(PDIODE_A_CH); // update channel to heart rate (clears `results_available` so we do not have to do that before)
     last_glucose_press = now;
   }

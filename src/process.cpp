@@ -9,12 +9,13 @@ static uint32_t cycle_min = 0, cycle_max = 0, frame_min = 10000, frame_max = 115
 static uint8_t cycle = 1; // 1 = rising, 0 = falling
 static uint32_t last_max_time = 0, max_time = 0; // tick of last rise
 
-void process_raw_reading(uint16_t val) {
+void process_raw_reading(adc_sample_t * sample) {
+  const uint16_t val = sample->val; // value of sample
+  const uint32_t now = sample->t; // time sample was completed
+
   if (val > 700) { // ignore, not enough reflectance
     return;
   }
-
-  const uint32_t now = millis();
 
   if (cycle == 1) { // rising portion of pulse
     if (val > cycle_max) {
