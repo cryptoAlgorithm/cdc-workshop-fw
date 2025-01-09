@@ -4,7 +4,8 @@
 
 // Heartbeat LED pin
 #define HB_LED_PIN      LED_BUILTIN
-#define GLUCOSE_BTN_PIN 8
+// Mode potentiometer (digital input, only differentiate between extremes)
+#define MODE_POT_PIN    8
 // Photodiode analog channel
 #define PDIODE_A_CH     0
 // Photoresistor analog channel
