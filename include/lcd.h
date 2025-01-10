@@ -17,6 +17,8 @@ typedef enum {
 
 void lcd_init();
 
+void lcd_hello_seq();
+
 void lcd_update_result();
 
 void lcd_draw_text_center(const char * text, const uint8_t row, const uint8_t padding);

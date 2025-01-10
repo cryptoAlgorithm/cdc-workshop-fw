@@ -31,6 +31,7 @@ void setup() {
 
   // Init LCD
   lcd_init();
+  lcd_hello_seq();
 
   // Start conversion
   Serial.println(F("Start ADC conversion..."));
@@ -102,13 +103,13 @@ void change_mode(measurement_mode_t mode, uint8_t inactivity) {
       break;
     case MODE_HEARTBEAT:
       title = "Heartbeat";
-      adc_update_ch(PDIODE_A_CH); // ensure correct ADC channel set (noop if already correct)
       process_init_hb();
+      adc_update_ch(PDIODE_A_CH); // ensure correct ADC channel set (noop if already correct)
       break;
     case MODE_GLUCOSE:
       title = "Glucose";
-      adc_update_ch(PRESIST_A_CH);
       process_init_glucose();
+      adc_update_ch(PRESIST_A_CH);
       break;
   }
   lcd_draw_alert(inactivity ? "User Inactivity" : "Current Mode", title);
@@ -191,6 +192,8 @@ void loop() {
   static uint8_t results_count;
   static uint8_t cur_mode_pos = digitalRead(MODE_POT_PIN);
   static uint32_t last_anim = 0;
+  static uint8_t last_pd_in_thres = 0;
+  static uint32_t first_pd_in_thres_time = 0;
 
   const uint32_t now = millis();
 
@@ -221,19 +224,31 @@ void loop() {
     if (lcd_can_draw()) {
       // first, check the current mode
       if (cur_mode == MODE_AUTO) {
-        if (sample_channel == PDIODE_A_CH && results_proc[0].val < 10) { // reading sharply falls to 0 when finger first placed
-          // probably have a finger
-          change_mode(MODE_HEARTBEAT, 0);
-          Serial.print(F("Switch to heartbeat: "));
-          Serial.println(results_proc[0].val);
-        } else if (sample_channel == PRESIST_A_CH && results_proc[0].val < 150) {
-          change_mode(MODE_GLUCOSE, 0);
-          Serial.print(F("Switch to glucose: "));
-          Serial.println(results_proc[0].val);
-        } else {
-          adc_update_ch(sample_channel == PDIODE_A_CH ? PRESIST_A_CH : PDIODE_A_CH);
+        if (sample_channel == PDIODE_A_CH) {
+          if (results_proc[0].val < 5) { // reading sharply falls to 0 when finger first placed
+            if (!last_pd_in_thres) { // first reading in thres
+              first_pd_in_thres_time = now;
+              last_pd_in_thres = 1;
+            }
+            if (now - first_pd_in_thres_time > 1000) { // probably have a finger
+              change_mode(MODE_HEARTBEAT, 0);
+              Serial.print(F("Switch to heartbeat: "));
+              Serial.println(results_proc[0].val);
+            }
+          } else {
+            last_pd_in_thres = 0;
+            // switch between reading both sensors for autodetection
+            adc_update_ch(PRESIST_A_CH);
+          }
+        } else if (sample_channel == PRESIST_A_CH) {
+          if (results_proc[0].val < 150) {
+            change_mode(MODE_GLUCOSE, 0);
+            Serial.print(F("Switch to glucose: "));
+            Serial.println(results_proc[0].val);
+          } else {
+            adc_update_ch(PDIODE_A_CH);
+          }
         }
-        // switch between reading both sensors for autodetection
       } else if (cur_mode == MODE_HEARTBEAT) {
         for (uint8_t i = 0; i < results_count; ++i) { // process everything in the batch
           process_raw_reading(&results_proc[i]);

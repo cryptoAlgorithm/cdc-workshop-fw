@@ -6,7 +6,8 @@
 #include "pins.h"
 
 // HR params
-#define HYSTERESIS_THRES 300
+#define HYSTERESIS_THRES 100
+#define AVG_NUM 10
 
 // Glucose params
 #define READING_W 427
@@ -14,15 +15,21 @@
 // Shared params
 #define INACTIVITY_TIMEOUT 10000 // time (in ms) from last valid reading to return to auto mode
 
-static uint16_t cycle_min = 0, cycle_max = 0, last_min = 20, last_max = 1000, last_margin = 0;
+static uint16_t cycle_min = 0, cycle_max = 0, last_min = 20, last_max = 1000, last_low_margin = 0, last_high_margin = 0;
 static uint8_t cycle = 1; // 1 = rising, 0 = falling
 static uint32_t last_max_time = 0, max_time = 0; // tick of last rise
 static uint32_t last_graphic_update = 0;
 static uint8_t has_finger = 1;
+static uint16_t past_bpm[AVG_NUM];
+static uint8_t past_bpm_pos = 0;
 
 void process_init_hb() {
-  has_finger = 1;
+  has_finger = 0;
   last_max_time = millis();
+  last_high_margin = 0;
+  last_low_margin = 0;
+  past_bpm_pos = 0; 
+  memset(past_bpm, 0, sizeof(past_bpm));
 }
 
 void process_raw_reading(adc_sample_t * sample) {
@@ -37,13 +44,22 @@ void process_raw_reading(adc_sample_t * sample) {
       // now falling!
       const uint16_t margin = cycle_max - cycle_min;
       const uint32_t diff = max_time - last_max_time; // time difference between 2 peaks
-      if (diff > 250 && margin > last_margin * 4/5) { // cap at 240bpm, 60/240 = 250ms
+      if (diff > 250 && margin > last_high_margin * 4/5) { // cap at 240bpm, 60/240 = 250ms
         cycle = 0;
+
+        // maintain running average
+        uint16_t bpm = 60000/diff;
         Serial.print(F("falling, margin: ")); Serial.print(margin);
         Serial.print(F(" BPM: ")); Serial.println(60000 / diff);
-        // printf("falling, val: %lu, margin: %lu, time: %lums, bpm: %lu\n", val, cycle_max - cycle_min, diff, 60000 / diff);
-        // char textbuf[32];
-        // snprintf(textbuf, sizeof(textbuf), "BPM: %lu", 60000 / diff);
+
+        if (!has_finger) {
+          for (uint8_t i = 0; i < AVG_NUM; ++i) past_bpm[i] = bpm;
+        } else {
+          past_bpm[past_bpm_pos] = bpm;
+        }
+        ++past_bpm_pos;
+        if (past_bpm_pos >= AVG_NUM) past_bpm_pos = 0;
+
         if (lcd_can_draw()) {
           if (!has_finger) { // need to clear previous text
             lcd.setCursor(0, 1);
@@ -51,7 +67,9 @@ void process_raw_reading(adc_sample_t * sample) {
           }
           lcd.setCursor(0, 1);
           lcd.print(F("Heart rate: "));
-          lcd.print(60000/diff);
+          uint16_t s = 0;
+          for (uint8_t i = 0; i < AVG_NUM; ++i) s += past_bpm[i];
+          lcd.print(s / AVG_NUM);
           lcd.print(F("BPM  "));
           lcd.setCursor(19, 1);
           lcd.write(LCD_CHAR_HEART_LG);
@@ -65,11 +83,12 @@ void process_raw_reading(adc_sample_t * sample) {
         cycle_min = val;
         digitalWrite(HB_LED_PIN, cycle);
         last_max_time = max_time;
+        last_high_margin = margin;
       } else {
         // discard this beat
         max_time = now;
       }
-      last_margin = margin;
+      last_high_margin = margin;
     }
   } else { // falling portion of pulse
     if (val < cycle_min) {
@@ -78,7 +97,7 @@ void process_raw_reading(adc_sample_t * sample) {
       // now rising!
       const uint16_t margin = cycle_max - cycle_min;
 
-      if (margin > last_margin * 4/5) {
+      if (margin > last_low_margin * 4/5) {
         cycle = 1;
         last_min = cycle_min;
         // printf("rising, val: %lu, margin: %lu\n", val, cycle_max - cycle_min);
@@ -91,9 +110,8 @@ void process_raw_reading(adc_sample_t * sample) {
           lcd.setCursor(19, 1);
           lcd.write(LCD_CHAR_HEART_SM);
         }
-      } else {
-        last_margin = margin;
       }
+      last_low_margin = margin;
     }
   }
 
@@ -110,14 +128,14 @@ void process_raw_reading(adc_sample_t * sample) {
     }
     last_graphic_update = real_now;
 
-    if (now - last_max_time > 3000 && has_finger) { // no beat for at least 3s -> probably no finger
+    if (now - last_max_time > 2000 && has_finger) { // no beat for at least 3s -> probably no finger
       if (val == 0) {
         lcd.setCursor(0, 1);
         lcd.print(F("Reading..."));
       } else {
         has_finger = 0;
         lcd.setCursor(0, 1);
-        lcd.print(F("Please touch sensor"));
+        lcd.print(F("Please touch sensor "));
       }
     }
 
